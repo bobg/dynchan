@@ -59,7 +59,7 @@ func NewWithBuffer[T any](b Buffer[T]) Chan[T] {
 }
 
 // Close closes the receiving end of the Chan.
-func (dc Chan[T]) Close() {
+func (dc *Chan[T]) Close() {
 	if dc.cancel == nil {
 		// Make this method idempotent.
 		return
