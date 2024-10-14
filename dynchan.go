@@ -1,6 +1,7 @@
 package dynchan
 
-// Chan is like a Go channel but with a dynamically sized buffer.
+// Chan is a dynamic channel.
+// It is like a Go channel but with a dynamically sized buffer.
 // (Normal Go channels have a fixed-size buffer.)
 // Because of this, sends never block.
 // To send items to the Chan, use its Send field.
@@ -9,20 +10,26 @@ package dynchan
 type Chan[T any] struct {
 	Send chan<- T
 	Recv <-chan T
+
+	cancel chan struct{}
 }
 
-// New creates a new Chan.
+// New creates a new [Chan].
 // This is equivalent to calling [NewWithBuffer] with a FIFO queue from [NewFifo].
+// You must close the Chan's Send channel when you are done sending items.
+// You must also call the Chan's Close method when you are done receiving items.
 func New[T any]() Chan[T] {
 	return NewWithBuffer[T](NewFifo[T]())
 }
 
-// NewWithBuffer creates a new Chan with a given buffer.
+// NewWithBuffer creates a new [Chan] with a given buffer.
 // This can be [NewFifo] for normal channel semantics,
 // [NewHeap] for priority-queue semantics,
 // or any type implementing the [Buffer] interface.
+// You must close the Chan's Send channel when you are done sending items.
+// You must also call the Chan's Close method when you are done receiving items.
 func NewWithBuffer[T any](b Buffer[T]) Chan[T] {
-	in, out := make(chan T), make(chan T)
+	in, out, cancel := make(chan T), make(chan T), make(chan struct{})
 
 	go func() {
 		for val := range in {
@@ -32,18 +39,33 @@ func NewWithBuffer[T any](b Buffer[T]) Chan[T] {
 	}()
 
 	go func() {
+		defer close(out)
+
 		for {
 			val, ok := b.Dequeue()
 			if !ok {
-				close(out)
 				return
 			}
 
-			out <- val
+			select {
+			case out <- val:
+			case <-cancel:
+				return
+			}
 		}
 	}()
 
-	return Chan[T]{Send: in, Recv: out}
+	return Chan[T]{Send: in, Recv: out, cancel: cancel}
+}
+
+// Close closes the receiving end of the Chan.
+func (dc Chan[T]) Close() {
+	if dc.cancel == nil {
+		// Make this method idempotent.
+		return
+	}
+	close(dc.cancel)
+	dc.cancel = nil
 }
 
 // Buffer is a dynamically sized buffer for use in a dynamic channel.
